@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from pymongo import MongoClient
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import threading
 import time
@@ -32,12 +32,15 @@ raw_col = db[COLLECTION_RAW]
 
 @st.cache_data(ttl=30)
 def get_historical(hours=24):
-    cutoff = datetime.utcnow() - timedelta(hours=hours)
-    cursor = raw_col.find({"timestamp": {"$gte": cutoff.isoformat() + 'Z'}}).sort("timestamp", -1)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cursor = raw_col.find({"timestamp": {"$gte": cutoff.isoformat()}}).sort("timestamp", -1)
     df = pd.DataFrame(list(cursor))
     if not df.empty:
-        df = df.drop(columns=['_id'], errors='ignore')   # <-- FIX: Drop MongoDB ObjectId column
+        df = df.drop(columns=['_id'], errors='ignore')
         df['timestamp'] = pd.to_datetime(df['timestamp'])
+        # Remove timezone info if present (future-proof check)
+        if hasattr(df['timestamp'].dtype, 'tz') and df['timestamp'].dtype.tz is not None:
+            df['timestamp'] = df['timestamp'].dt.tz_localize(None)
     return df
 
 @st.cache_data(ttl=30)
@@ -46,8 +49,11 @@ def get_latest_from_mongo(limit=200):
     cursor = raw_col.find().sort("timestamp", -1).limit(limit)
     df = pd.DataFrame(list(cursor))
     if not df.empty:
-        df = df.drop(columns=['_id'], errors='ignore')   # <-- FIX: Drop MongoDB ObjectId column
+        df = df.drop(columns=['_id'], errors='ignore')
         df['timestamp'] = pd.to_datetime(df['timestamp'])
+        # Remove timezone info if present (future-proof check)
+        if hasattr(df['timestamp'].dtype, 'tz') and df['timestamp'].dtype.tz is not None:
+            df['timestamp'] = df['timestamp'].dt.tz_localize(None)
     return df
 
 def get_available_countries():
@@ -74,7 +80,7 @@ class LiveIndicatorConsumer:
                 consumer = KafkaConsumer(
                     TOPIC_NAME,
                     bootstrap_servers=KAFKA_BROKER,
-                    auto_offset_reset='earliest', 
+                    auto_offset_reset='earliest',
                     value_deserializer=lambda x: json.loads(x.decode('utf-8')),
                     consumer_timeout_ms=10000
                 )
@@ -94,7 +100,7 @@ class LiveIndicatorConsumer:
             print("Live consumer could not connect to Kafka. Will fall back to MongoDB polling.")
             self.connected = False
             return
-        
+
         self.connected = True
         try:
             for msg in consumer:
@@ -118,14 +124,20 @@ if 'consumer' not in st.session_state:
 
 # --- Export Helper ---
 def export_data(df, fmt='csv'):
+    # Work on a copy to avoid modifying original DataFrame
+    export_df = df.copy()
+    # Remove timezone info from any datetime columns
+    for col in export_df.select_dtypes(include=['datetimetz']).columns:
+        export_df[col] = export_df[col].dt.tz_localize(None)
+
     if fmt == 'csv':
-        data = df.to_csv(index=False)
+        data = export_df.to_csv(index=False)
         mime = 'text/csv'
         ext = 'csv'
     elif fmt == 'excel':
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as w:
-            df.to_excel(w, index=False)
+            export_df.to_excel(w, index=False)
         data = output.getvalue()
         mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         ext = 'xlsx'
@@ -140,11 +152,11 @@ page = st.sidebar.radio("Page", ["Live Stream", "Historical Analysis"])
 
 if page == "Live Stream":
     st.title("📡 Live Development Indicators")
-    st_autorefresh(interval=10000, key="live_refresh") 
-    
+    st_autorefresh(interval=10000, key="live_refresh")
+
     # Try to get data from live Kafka consumer
     live = st.session_state.consumer.get_latest(200)
-    
+
     if live:
         df_live = pd.DataFrame(live)
         st.success(f"✅ Streaming real data via Kafka: {len(df_live)} records")
@@ -157,12 +169,12 @@ if page == "Live Stream":
             st.warning("⏳ Waiting for data... The producer fetches updates every 60 seconds.")
             st.info("The World Bank API provides annual data. Live updates reflect the latest available year for each indicator.")
             df_live = pd.DataFrame()
-    
+
     if not df_live.empty:
         col1, col2 = st.columns(2)
         with col1:
             selected_countries = st.multiselect(
-                "Countries", 
+                "Countries",
                 options=sorted(df_live['country_name'].unique()),
                 default=sorted(df_live['country_name'].unique())[:3]
             )
@@ -172,15 +184,15 @@ if page == "Live Stream":
                 options=sorted(df_live['indicator_name'].unique()),
                 default=sorted(df_live['indicator_name'].unique())[:2]
             )
-        
+
         if selected_countries:
             df_live = df_live[df_live['country_name'].isin(selected_countries)]
         if selected_indicators:
             df_live = df_live[df_live['indicator_name'].isin(selected_indicators)]
-        
+
         st.subheader("Latest Values by Indicator")
         latest_by_indicator = df_live.sort_values('timestamp').groupby(['country_name', 'indicator_name']).last().reset_index()
-        
+
         for indicator in selected_indicators:
             st.markdown(f"**{indicator}**")
             cols = st.columns(min(len(selected_countries), 4))
@@ -192,19 +204,19 @@ if page == "Live Stream":
                     year = country_data.iloc[0]['year']
                     with cols[i % 4]:
                         st.metric(f"{country}", f"{val:,.0f}" if val > 100 else f"{val:,.2f}", delta=f"Year: {year}")
-        
+
         st.subheader("Cross-Country Comparison")
         if len(selected_indicators) > 0:
             fig_bar = px.bar(
-                latest_by_indicator, 
-                x='country_name', 
-                y='value', 
+                latest_by_indicator,
+                x='country_name',
+                y='value',
                 color='indicator_name',
                 barmode='group',
                 title="Latest Indicator Values by Country"
             )
-            st.plotly_chart(fig_bar, width='stretch')   # <-- FIX: deprecated parameter
-        
+            st.plotly_chart(fig_bar, width='stretch')
+
         if df_live['timestamp'].nunique() > 1:
             st.subheader("Recent Updates")
             fig_line = px.line(
@@ -215,8 +227,8 @@ if page == "Live Stream":
                 line_dash='indicator_name',
                 title="Values Over Time"
             )
-            st.plotly_chart(fig_line, width='stretch')   # <-- FIX: deprecated parameter
-        
+            st.plotly_chart(fig_line, width='stretch')
+
         st.subheader("Recent Records")
         st.dataframe(df_live.sort_values('timestamp', ascending=False).head(20), width='stretch')
     else:
@@ -224,15 +236,15 @@ if page == "Live Stream":
 
 elif page == "Historical Analysis":
     st.title("📊 Historical Indicator Analysis")
-    
+
     hours = st.slider("Hours of data to load", 1, 168, 24)
     df_hist = get_historical(hours)
-    
+
     if not df_hist.empty:
         col1, col2 = st.columns(2)
         with col1:
             hist_countries = st.multiselect(
-                "Countries", 
+                "Countries",
                 options=sorted(df_hist['country_name'].unique()),
                 default=sorted(df_hist['country_name'].unique())[:5]
             )
@@ -242,14 +254,14 @@ elif page == "Historical Analysis":
                 options=sorted(df_hist['indicator_name'].unique()),
                 default=sorted(df_hist['indicator_name'].unique())[:2]
             )
-        
+
         if hist_countries:
             df_hist = df_hist[df_hist['country_name'].isin(hist_countries)]
         if hist_indicators:
             df_hist = df_hist[df_hist['indicator_name'].isin(hist_indicators)]
-        
+
         st.subheader(f"Historical Data (Last {hours} Hours, {len(df_hist)} records)")
-        
+
         fig_hist = px.line(
             df_hist.sort_values('timestamp'),
             x='timestamp',
@@ -258,13 +270,13 @@ elif page == "Historical Analysis":
             line_dash='indicator_name',
             title="Indicator Trends"
         )
-        st.plotly_chart(fig_hist, width='stretch')   # <-- FIX: deprecated parameter
-        
+        st.plotly_chart(fig_hist, width='stretch')
+
         if not df_hist.empty:
             st.subheader("Statistical Summary")
             summary = df_hist.groupby(['country_name', 'indicator_name'])['value'].agg(['mean', 'min', 'max', 'count']).round(2)
             st.dataframe(summary, width='stretch')
-        
+
         st.subheader("Export Data")
         col1, col2, _ = st.columns([1,1,2])
         with col1:
@@ -273,7 +285,7 @@ elif page == "Historical Analysis":
         with col2:
             if st.button("📥 Export as Excel"):
                 st.markdown(export_data(df_hist, 'excel'), unsafe_allow_html=True)
-        
+
         with st.expander("View All Historical Data"):
             st.dataframe(df_hist.sort_values('timestamp', ascending=False), width='stretch')
     else:
