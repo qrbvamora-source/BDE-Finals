@@ -29,13 +29,6 @@ services:
       timeout: 10s
       retries: 8
 
-  mongodb:
-    image: mongo:6.0
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodb_data:/data/db
-
   producer:
     build: ./producer
     depends_on:
@@ -52,15 +45,11 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      mongodb:
-        condition: service_started
+
     environment:
       KAFKA_BROKER: kafka:9092
       KAFKA_TOPIC: worldbank-data
-      MONGO_URI: mongodb://mongodb:27017
+      MONGO_URI: mongodb+srv://qclumadac_db_user:123@groceryinventorysystem.lxegof0.mongodb.net/?retryWrites=true&w=majority&appName=GroceryInventorySystem
       MONGO_DB: worldbank_db
       MONGO_COLLECTION: indicator_history
     restart: unless-stopped
-
-volumes:
-  mongodb_data:

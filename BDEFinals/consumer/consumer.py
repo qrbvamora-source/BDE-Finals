@@ -7,17 +7,15 @@ from datetime import datetime
 
 KAFKA_BROKER = os.getenv('KAFKA_BROKER', 'localhost:9092')
 TOPIC_NAME = os.getenv('KAFKA_TOPIC', 'worldbank-data')
-MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017')
+MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017')  # ✅ Will be overridden by the environment variable
 DB_NAME = os.getenv('MONGO_DB', 'worldbank_db')
 COLLECTION_NAME = os.getenv('MONGO_COLLECTION', 'indicator_history')
 
-# MongoDB setup
-client = MongoClient(MONGO_URI)
+client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
 db = client[DB_NAME]
 collection = db[COLLECTION_NAME]
-print(f"Connected to MongoDB at {MONGO_URI}")
+print(f"Connected to MongoDB Atlas at {MONGO_URI}")
 
-# Kafka consumer with retry
 max_retries = 12
 retry_delay = 5
 

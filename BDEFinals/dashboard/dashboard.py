@@ -17,14 +17,14 @@ st.set_page_config(page_title="World Bank Live Indicators", layout="wide")
 # --- Configuration ---
 KAFKA_BROKER = 'host.docker.internal:9092'
 TOPIC_NAME = 'worldbank-data'
-MONGO_URI = 'mongodb://localhost:27017'
+MONGO_URI = 'mongodb+srv://qclumadac_db_user:123@groceryinventorysystem.lxegof0.mongodb.net/?retryWrites=true&w=majority&appName=GroceryInventorySystem'
 DB_NAME = 'worldbank_db'
 COLLECTION_RAW = 'indicator_history'
 
 # --- MongoDB ---
 @st.cache_resource
 def init_mongo():
-    client = MongoClient(MONGO_URI)
+    client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)  # ✅ Added TLS parameter for Atlas
     return client[DB_NAME]
 
 db = init_mongo()
@@ -38,7 +38,6 @@ def get_historical(hours=24):
     if not df.empty:
         df = df.drop(columns=['_id'], errors='ignore')
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        # Remove timezone info if present (future-proof check)
         if hasattr(df['timestamp'].dtype, 'tz') and df['timestamp'].dtype.tz is not None:
             df['timestamp'] = df['timestamp'].dt.tz_localize(None)
     return df
@@ -51,7 +50,6 @@ def get_latest_from_mongo(limit=200):
     if not df.empty:
         df = df.drop(columns=['_id'], errors='ignore')
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        # Remove timezone info if present (future-proof check)
         if hasattr(df['timestamp'].dtype, 'tz') and df['timestamp'].dtype.tz is not None:
             df['timestamp'] = df['timestamp'].dt.tz_localize(None)
     return df
