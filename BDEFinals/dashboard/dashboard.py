@@ -24,7 +24,7 @@ COLLECTION_RAW = 'indicator_history'
 # --- MongoDB ---
 @st.cache_resource
 def init_mongo():
-    client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)  # ✅ Added TLS parameter for Atlas
+    client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
     return client[DB_NAME]
 
 db = init_mongo()
